@@ -4,7 +4,9 @@ using System.Linq;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Operations;
@@ -24,6 +26,7 @@ namespace SelectNextOccurrence
         /// <summary>
         /// The top level in the Visual Studio automation object model.
         /// Needed to get the find-object to determine search-options
+        /// Note: This can be null if DTE2 service is unavailable during initialization
         /// </summary>
         internal readonly DTE2 Dte;
 
@@ -86,8 +89,29 @@ namespace SelectNextOccurrence
             this.textSearchService = textSearchService;
             this.EditorOperations = editorOperationsService.GetEditorOperations(this.view);
             this.outliningManager = outliningManagerService?.GetOutliningManager(this.view);
-            this.Dte = (DTE2) Package.GetGlobalService(typeof(DTE));
-            Assumes.Present(Dte);
+            
+            try
+            {
+                this.Dte = (DTE2) Package.GetGlobalService(typeof(DTE));
+                
+                if (this.Dte == null)
+                {
+                    LogToActivityLog("Warning: DTE2 service is not available. Find dialog settings (Match case/Match whole word) will not be accessible.", 
+                        __ACTIVITYLOG_ENTRYTYPE.ALE_WARNING);
+                }
+                else if (this.Dte.Find == null)
+                {
+                    LogToActivityLog("Warning: DTE2.Find is not available. Find dialog settings (Match case/Match whole word) will not be accessible.", 
+                        __ACTIVITYLOG_ENTRYTYPE.ALE_WARNING);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToActivityLog($"Error initializing DTE2 service: {ex.Message}. Find dialog settings will not be accessible.", 
+                    __ACTIVITYLOG_ENTRYTYPE.ALE_ERROR);
+                this.Dte = null;
+            }
+            
             this.Selections = new List<Selection>();
             this.historyManager = new HistoryManager();
         }
@@ -139,12 +163,39 @@ namespace SelectNextOccurrence
                 findData.FindOptions |= FindOptions.MatchCase | FindOptions.WholeWord;
             }
             else
-            {   
-                if (Dte.Find.MatchCase)
-                    findData.FindOptions |= FindOptions.MatchCase;
+            {
+                try
+                {
+                    // Check if DTE and DTE.Find are available before accessing
+                    if (Dte != null && Dte.Find != null)
+                    {
+                        if (Dte.Find.MatchCase)
+                            findData.FindOptions |= FindOptions.MatchCase;
 
-                if (Dte.Find.MatchWholeWord)
-                    findData.FindOptions |= FindOptions.WholeWord;
+                        if (Dte.Find.MatchWholeWord)
+                            findData.FindOptions |= FindOptions.WholeWord;
+                    }
+                    else
+                    {
+                        // Fallback: Default to case-sensitive matching when DTE is not available
+                        // This provides consistent behavior when Find dialog settings cannot be read.
+                        // WholeWord is not enabled by default as it's more restrictive and might
+                        // break user expectations in most programming scenarios.
+                        findData.FindOptions |= FindOptions.MatchCase;
+                        
+                        LogToActivityLog("DTE2.Find is not available in GetFindData(). Using default case-sensitive search.", 
+                            __ACTIVITYLOG_ENTRYTYPE.ALE_WARNING);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Fallback: Default to case-sensitive matching if an error occurs.
+                    // WholeWord is not enabled by default as it's more restrictive.
+                    findData.FindOptions |= FindOptions.MatchCase;
+                    
+                    LogToActivityLog($"Error accessing DTE2.Find settings: {ex.Message}. Using default case-sensitive search.", 
+                        __ACTIVITYLOG_ENTRYTYPE.ALE_ERROR);
+                }
             }
 
             if (reverse)
@@ -477,8 +528,19 @@ namespace SelectNextOccurrence
         internal void OpenUndoContext()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (!Dte.UndoContext.IsOpen)
-                Dte.UndoContext.Open(Vsix.Name);
+            
+            try
+            {
+                if (Dte != null && Dte.UndoContext != null && !Dte.UndoContext.IsOpen)
+                {
+                    Dte.UndoContext.Open(Vsix.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToActivityLog($"Error opening undo context: {ex.Message}", 
+                    __ACTIVITYLOG_ENTRYTYPE.ALE_WARNING);
+            }
 
             historyManager.StoreSelectionsHistory(Snapshot, Selections);
         }
@@ -489,8 +551,19 @@ namespace SelectNextOccurrence
         internal void CloseUndoContext()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (Dte.UndoContext.IsOpen)
-                Dte.UndoContext.Close();
+            
+            try
+            {
+                if (Dte != null && Dte.UndoContext != null && Dte.UndoContext.IsOpen)
+                {
+                    Dte.UndoContext.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogToActivityLog($"Error closing undo context: {ex.Message}", 
+                    __ACTIVITYLOG_ENTRYTYPE.ALE_WARNING);
+            }
 
             historyManager.SaveSelectionsToHistory(Snapshot, Selections);
         }
@@ -594,6 +667,35 @@ namespace SelectNextOccurrence
         internal void ClearSavedClipboard()
         {
             SavedClipboard = new List<string>();
+        }
+
+        /// <summary>
+        /// Logs diagnostic information to the Visual Studio Activity Log
+        /// Users can view this in Help -> "View Log" or %AppData%\Microsoft\VisualStudio\{version}\ActivityLog.xml
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        /// <param name="entryType">The type of log entry</param>
+        private void LogToActivityLog(string message, __ACTIVITYLOG_ENTRYTYPE entryType)
+        {
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var log = Package.GetGlobalService(typeof(SVsActivityLog)) as IVsActivityLog;
+                
+                if (log != null)
+                {
+                    log.LogEntry(
+                        (uint)entryType,
+                        "SelectNextOccurrence",
+                        message
+                    );
+                }
+            }
+            catch (Exception)
+            {
+                // Silently fail if logging is not available
+                // We don't want logging failures to break the extension
+            }
         }
     }
 }
