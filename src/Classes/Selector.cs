@@ -182,7 +182,9 @@ namespace SelectNextOccurrence
                     else
                     {
                         // Fallback: Default to case-sensitive matching when DTE is not available
-                        // This provides consistent behavior when Find dialog settings cannot be read
+                        // This provides consistent behavior when Find dialog settings cannot be read.
+                        // WholeWord is not enabled by default as it's more restrictive and might
+                        // break user expectations in most programming scenarios.
                         findData.FindOptions |= FindOptions.MatchCase;
                         
                         LogToActivityLog("DTE2.Find is not available in GetFindData(). Using default case-sensitive search.", 
@@ -191,7 +193,8 @@ namespace SelectNextOccurrence
                 }
                 catch (Exception ex)
                 {
-                    // Fallback: Default to case-sensitive matching if an error occurs
+                    // Fallback: Default to case-sensitive matching if an error occurs.
+                    // WholeWord is not enabled by default as it's more restrictive.
                     findData.FindOptions |= FindOptions.MatchCase;
                     
                     LogToActivityLog($"Error accessing DTE2.Find settings: {ex.Message}. Using default case-sensitive search.", 
@@ -692,7 +695,7 @@ namespace SelectNextOccurrence
                     );
                 }
             }
-            catch
+            catch (Exception)
             {
                 // Silently fail if logging is not available
                 // We don't want logging failures to break the extension
