@@ -26,6 +26,7 @@ namespace SelectNextOccurrence
         /// <summary>
         /// The top level in the Visual Studio automation object model.
         /// Needed to get the find-object to determine search-options
+        /// Note: This can be null if DTE2 service is unavailable during initialization
         /// </summary>
         internal readonly DTE2 Dte;
 
@@ -102,11 +103,6 @@ namespace SelectNextOccurrence
                 {
                     LogToActivityLog("Warning: DTE2.Find is not available. Find dialog settings (Match case/Match whole word) will not be accessible.", 
                         __ACTIVITYLOG_ENTRYTYPE.ALE_WARNING);
-                }
-                else
-                {
-                    LogToActivityLog("DTE2 service initialized successfully. Find dialog settings are accessible.", 
-                        __ACTIVITYLOG_ENTRYTYPE.ALE_INFORMATION);
                 }
             }
             catch (Exception ex)
